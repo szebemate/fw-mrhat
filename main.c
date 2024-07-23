@@ -52,14 +52,20 @@ static bool Client_Application(i2c_client_transfer_event_t event);
 //  bit1: deep shutdown reg
 //reg2 STAT
 //  bit0: battery_available
+//reg 3 BTN_STAT
+//reg 4
+    //irq test, number of button long press count
+//reg 9 i2c error state
+    //value of i2c_client_error_t enum
+
 
 // Private variable
 volatile uint8_t CLIENT_DATA[I2C_CLIENT_LOCATION_SIZE] = {
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09
+    0x55, 0x01, 0x02, 0x03, 0, 0x05, 0x06, 0x07, 0x08, 0x09
 };
 
-static uint8_t clientLocation = 0x00;
-static bool isClientLocation = false;
+volatile static uint8_t clientLocation = 0x00;
+volatile static bool isClientLocation = false;
 
 static bool Client_Application(i2c_client_transfer_event_t event) {
     switch (event) {
@@ -96,6 +102,7 @@ static bool Client_Application(i2c_client_transfer_event_t event) {
         case I2C_CLIENT_TRANSFER_EVENT_ERROR: //Error Event Handler
             clientLocation = 0x00;
             i2c_client_error_t errorState = I2C1_Client.ErrorGet();
+            CLIENT_DATA[9] = errorState;
             if (errorState == I2C_CLIENT_ERROR_BUS_COLLISION) {
                 // Bus Collision Error Handling
             } else if (errorState == I2C_CLIENT_ERROR_WRITE_COLLISION) {
@@ -160,6 +167,9 @@ void switch_i2c_mode(volatile struct TaskDescr* taskd) {
 }
 
 void PIRunModeChanged() {
+    //disabled for now
+    return;
+    
     if (PI_RUN_GetValue()) {
         add_task(TASK_I2C_SWITCH_MODE, switch_i2c_mode, &client_mode);
     } else {
@@ -168,24 +178,44 @@ void PIRunModeChanged() {
 }
 
 
+//this task set MCU_INT pin after 200msec
+//when the pin is set to low we have to wait a little time
+static uint64_t pin_reset_time = 0;
+void MCU_INT_SetHigh(volatile struct TaskDescr* taskd){
+    uint64_t now = GetTimeMs();
+    uint64_t reset_time = *(uint64_t*)taskd->task_state;
+    if((reset_time+200) < now){
+        MCU_INT_N_SetHigh();
+        rm_task(TASK_MCU_INT_PIN_SET_HIGH);
+    }
+    
+}
 void OnOffSwithcPressed(enum ONOFFTypes type) {
+    CLIENT_DATA[3]=type;
     switch (type) {
         case BTN_1L:
-            if (I2C1_Current_Mode() == I2C1_HOST_MODE) {
-                add_task(TASK_I2C_WAKEUP, read_device_id, regAddrBuff);
-            }
-            CHG_DISA_Toggle();
+            //start shutdown procedure
+            MCU_INT_N_SetLow();
+            uint8_t var = CLIENT_DATA[4] + 1;
+            CLIENT_DATA[4] = var;
+            pin_reset_time=GetTimeMs();
+            add_task(TASK_MCU_INT_PIN_SET_HIGH, MCU_INT_SetHigh, &pin_reset_time);
+
+//            if (I2C1_Current_Mode() == I2C1_HOST_MODE) {
+//                add_task(TASK_I2C_WAKEUP, read_device_id, regAddrBuff);
+//            }
+//            CHG_DISA_Toggle();
             break;
         case BTN_1S_1L:
-            if (I2C1_Current_Mode() == I2C1_HOST_MODE) {
-                add_task(TASK_I2C_WAKEUP, read_device_id, regAddrBuff2);
-            }
-            I2C_SEL_N_Toggle();
+//            if (I2C1_Current_Mode() == I2C1_HOST_MODE) {
+//                add_task(TASK_I2C_WAKEUP, read_device_id, regAddrBuff2);
+//            }
+//            I2C_SEL_N_Toggle();
             break;
         case BTN_1S_1S_1L:
-            if (I2C1_Current_Mode() == I2C1_HOST_MODE) {
-                add_task(TASK_I2C_WAKEUP, read_device_id, regAddrBuff2);
-            }
+//            if (I2C1_Current_Mode() == I2C1_HOST_MODE) {
+//                add_task(TASK_I2C_WAKEUP, read_device_id, regAddrBuff2);
+//            }
             break;
     };
 
@@ -213,9 +243,7 @@ int main(){
     //INTERRUPT_GlobalInterruptDisable();
     
     //1msec freerunngin timer irq
-    TMR1_OverflowCallbackRegister(MiliSecTimerOverflow);
-
-    
+    TMR1_OverflowCallbackRegister(MiliSecTimerOverflow);    
     //go to host mode
     I2C1_Switch_Mode(I2C1_HOST_MODE);
     
@@ -225,8 +253,8 @@ int main(){
     //go back to client mode
     I2C1_Switch_Mode(I2C1_CLIENT_MODE);
     I2C1_Client.CallbackRegister(Client_Application);
+    I2C_SEL_N_SetHigh(); //enable pi i2c
 
-    
     run_tasks();
     return 0;
 }

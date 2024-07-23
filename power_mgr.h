@@ -11,8 +11,10 @@
 #ifdef	__cplusplus
 extern "C" {
 #endif
+    uint64_t GetTimeMs();
 
     int CheckBattery(void);
+    void DelayMS(uint32_t delay_ms);
 
 
 #ifdef	__cplusplus
