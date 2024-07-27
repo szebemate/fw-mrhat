@@ -17,7 +17,9 @@ extern "C" {
         TASK_I2C_WAKEUP,
         TASK_I2C_SWITCH_MODE,
         TASK_DEMO,
-        TASK_MCU_INT_PIN_SET_HIGH,
+        TASK_SHUTDOWN_BUTTON_PRESSED,
+        TASK_PI_SHUTDOWN_MONITOR,
+        TASK_POWER_IC_SYSTEM_RESET,
         TASK_NUM
     };
 

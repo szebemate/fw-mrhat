@@ -35,6 +35,7 @@
 #include "tasks.h"
 #include "onoff.h"
 #include "power_mgr.h"
+#include "shutdown_mgr.h"
 /*
     Main application
  */
@@ -43,7 +44,7 @@ extern void MiliSecTimerOverflow();
 #define I2C_CLIENT_LOCATION_SIZE 10
 
 //Private functions
-static bool Client_Application(i2c_client_transfer_event_t event);
+bool Client_Application(i2c_client_transfer_event_t event);
 
 
 //reg 0 FW id
@@ -55,6 +56,10 @@ static bool Client_Application(i2c_client_transfer_event_t event);
 //reg 3 BTN_STAT
 //reg 4
     //irq test, number of button long press count
+    //0x55 means shutdown is requested from PIC
+// reg5
+    //PI will fill it to sign shutdown request has been acknowledged
+    //0xAA means PI has acked shutdown req
 //reg 9 i2c error state
     //value of i2c_client_error_t enum
 
@@ -66,8 +71,7 @@ volatile uint8_t CLIENT_DATA[I2C_CLIENT_LOCATION_SIZE] = {
 
 volatile static uint8_t clientLocation = 0x00;
 volatile static bool isClientLocation = false;
-
-static bool Client_Application(i2c_client_transfer_event_t event) {
+bool Client_Application(i2c_client_transfer_event_t event) {
     switch (event) {
         case I2C_CLIENT_TRANSFER_EVENT_ADDR_MATCH: //Address Match Event
             if (I2C1_Client.TransferDirGet() == I2C_CLIENT_TRANSFER_DIR_WRITE) {
@@ -166,53 +170,26 @@ void switch_i2c_mode(volatile struct TaskDescr* taskd) {
     rm_task(TASK_I2C_SWITCH_MODE);
 }
 
-void PIRunModeChanged() {
-    //disabled for now
-    return;
-    
-    if (PI_RUN_GetValue()) {
-        add_task(TASK_I2C_SWITCH_MODE, switch_i2c_mode, &client_mode);
-    } else {
-        add_task(TASK_I2C_SWITCH_MODE, switch_i2c_mode, &host_mode);
-    }
-}
 
 
-//this task set MCU_INT pin after 200msec
-//when the pin is set to low we have to wait a little time
-static uint64_t pin_reset_time = 0;
-void MCU_INT_SetHigh(volatile struct TaskDescr* taskd){
-    uint64_t now = GetTimeMs();
-    uint64_t reset_time = *(uint64_t*)taskd->task_state;
-    if((reset_time+200) < now){
-        MCU_INT_N_SetHigh();
-        rm_task(TASK_MCU_INT_PIN_SET_HIGH);
-    }
-    
-}
+
 void OnOffSwithcPressed(enum ONOFFTypes type) {
     CLIENT_DATA[3]=type;
     switch (type) {
         case BTN_1L:
-            //start shutdown procedure
-            MCU_INT_N_SetLow();
-            uint8_t var = CLIENT_DATA[4] + 1;
-            CLIENT_DATA[4] = var;
-            pin_reset_time=GetTimeMs();
-            add_task(TASK_MCU_INT_PIN_SET_HIGH, MCU_INT_SetHigh, &pin_reset_time);
-
-//            if (I2C1_Current_Mode() == I2C1_HOST_MODE) {
-//                add_task(TASK_I2C_WAKEUP, read_device_id, regAddrBuff);
-//            }
-//            CHG_DISA_Toggle();
+            ShutdownButtonPressed();
             break;
         case BTN_1S_1L:
+            //wake up pi
+//            MCU_INT_N_SetHigh();
 //            if (I2C1_Current_Mode() == I2C1_HOST_MODE) {
 //                add_task(TASK_I2C_WAKEUP, read_device_id, regAddrBuff2);
 //            }
 //            I2C_SEL_N_Toggle();
             break;
         case BTN_1S_1S_1L:
+            add_task(TASK_POWER_IC_SYSTEM_RESET,PowMgrSystemReset,NULL);
+            
 //            if (I2C1_Current_Mode() == I2C1_HOST_MODE) {
 //                add_task(TASK_I2C_WAKEUP, read_device_id, regAddrBuff2);
 //            }
@@ -221,7 +198,20 @@ void OnOffSwithcPressed(enum ONOFFTypes type) {
 
 }
 
-
+volatile uint64_t pi_run_last_falling_time_ms=0;
+void PIRunModeChanged() {
+    if(!PI_RUN_GetValue()){
+        //save last fall time
+        pi_run_last_falling_time_ms = GetTimeMs();
+    }
+//    if (PI_RUN_GetValue()) {
+//        add_task(TASK_I2C_SWITCH_MODE, switch_i2c_mode, &client_mode);
+//    } else {
+//        //remove PI from I2C bus
+//        add_task(TASK_I2C_SWITCH_MODE, switch_i2c_mode, &host_mode);
+//        I2C_SEL_N_SetLow(); //enable pi i2c
+//    }
+}
 
 int main(){
     SYSTEM_Initialize();
@@ -235,7 +225,9 @@ int main(){
 
     ONOFF_CallbackRegister(OnOffSwithcPressed);
 
+    //enable PI RUN pin irq
     PI_RUN_SetInterruptHandler(PIRunModeChanged);
+    
     // Enable the Global Interrupts 
     INTERRUPT_GlobalInterruptHighEnable();
     INTERRUPT_GlobalInterruptLowEnable();
@@ -248,12 +240,15 @@ int main(){
     I2C1_Switch_Mode(I2C1_HOST_MODE);
     
     //set charge enable when battery is present
-    CheckBattery();
+    PowMgrEnableDisableCharging();
+    
+    //init shutdown mgr 
+    ShutdownMgrInit();
     
     //go back to client mode
     I2C1_Switch_Mode(I2C1_CLIENT_MODE);
     I2C1_Client.CallbackRegister(Client_Application);
-    I2C_SEL_N_SetHigh(); //enable pi i2c
+    I2C_SEL_N_SetHigh(); //enable pi i2c bus
 
     run_tasks();
     return 0;

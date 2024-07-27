@@ -12,10 +12,10 @@
 extern "C" {
 #endif
     uint64_t GetTimeMs();
-
-    int CheckBattery(void);
+    void PowMgrSystemReset(volatile struct TaskDescr*);
+    int PowMgrEnableDisableCharging(void);
+    int PowMgrGoToShipMode(void);
     void DelayMS(uint32_t delay_ms);
-
 
 #ifdef	__cplusplus
 }

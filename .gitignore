@@ -92,3 +92,8 @@ funclist
 nbproject/Makefile-*
 disassembly/
 .generated_files/
+
+
+
+#Ignore MAC OS ds store files
+*.DS_Store
